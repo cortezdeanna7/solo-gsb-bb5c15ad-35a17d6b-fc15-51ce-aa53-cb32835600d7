@@ -29,6 +29,8 @@
  * }
  */
 
+const { pairKeyOf } = require('./familyGraph');
+
 /** 姓名（中文排序）、成员 ID 的稳定排序比较器 */
 function compareIdsByNameThenId(nameOf) {
   return (a, b) => {
@@ -72,8 +74,10 @@ function findCriticalLinks(state) {
     };
   }
 
-  // 无向邻接表：edgeKey 唯一定位一条关系；邻接项按邻居姓名、ID 排序保证确定性
-  const edgeKeyOf = (e) => `${e.parentId}|${e.childId}`;
+  // 无向邻接表：edgeKey 唯一定位一条关系；邻接项按邻居姓名、ID 排序保证确定性。
+  // 键按有序端点编码（pairKeyOf）：成员 ID 含 "|"、空格等字符时
+  // 不同关系也不会碰撞（否则桥查找会按错键跳过来路、张冠李戴）。
+  const edgeKeyOf = (e) => pairKeyOf(e.parentId, e.childId);
   const edgeByKey = new Map();
   const adj = new Map([...nameOf.keys()].map((id) => [id, []]));
   for (const e of edges) {
