@@ -32,6 +32,7 @@ const {
   validateBackup,
   previewMergeMembers,
   isReachableUp,
+  pairKey,
   MAX_MEMBERS,
 } = require('./familyGraph');
 const {
@@ -304,11 +305,13 @@ function createStore(filePath) {
       return { error: result.error, status: 400, result };
     }
 
-    // 全部合法：按批内去重后的边一次写入（校验已保证与现有关系不重复）
+    // 全部合法：按批内去重后的边一次写入（校验已保证与现有关系不重复）。
+    // 成员对按有序端点 (子女, 父母) 编码：ID 含「|」或空格的不同关系不会
+    // 碰撞成同一键，两条不同的关系都会写入，不会静默丢边。
     const seen = new Set();
     const toAdd = [];
     for (const item of result.items) {
-      const key = `${item.childId} ${item.parentId}`;
+      const key = pairKey(item.childId, item.parentId);
       if (seen.has(key)) continue;
       seen.add(key);
       toAdd.push(item);

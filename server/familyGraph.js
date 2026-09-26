@@ -34,6 +34,21 @@ function hasMember(state, id) {
 }
 
 /**
+ * 成员对的规范键：按**有序**端点 (first, second) 编码，用作 Map/Set 的键。
+ *
+ * 不能用分隔符拼接（如 `${a}|${b}` 或 `${a} ${b}`）：成员 ID 允许包含
+ * 「|」、空格等任意字符（备份恢复会保留原 ID），拼接会让不同的成员对碰撞——
+ * 例如 ("b|c","a") 与 ("c","a|b") 拼出同样的 "a|b|c"，
+ * ("b c","a") 与 ("c","a b") 拼出同样的 "a b c"，
+ * 导致两条不同关系被误判为重复、批量提交时静默丢边。
+ * JSON 数组编码对引号、反斜杠与控制字符都有明确转义，
+ * 不同的有序对必然得到不同的键；键仅用于进程内比较，不写入任何数据格式。
+ */
+function pairKey(first, second) {
+  return JSON.stringify([first, second]);
+}
+
+/**
  * 判断从 from 出发沿“父母链”向上是否能到达 to（含 from === to）。
  * parentsOf 是一个 DAG（外部保证），此处用栈式 DFS。
  */
@@ -115,7 +130,7 @@ function validateEdgeBatch(state, rawEdges) {
     };
   }
 
-  // 第一阶段：结构校验（成员存在、自指），同时按「无序对 child|parent」找批内重复。
+  // 第一阶段：结构校验（成员存在、自指），同时按「有序对 (子女, 父母)」找批内重复。
   // 结构不合法的条目不参与后续计数与环路检测。
   const items = rawEdges.map((raw, index) => {
     const parentId =
@@ -141,8 +156,9 @@ function validateEdgeBatch(state, rawEdges) {
     return { index, parentId: parentId || null, childId: childId || null, errors, structurallyValid };
   });
 
-  // 批内重复：同一条父母→子女在草稿中出现多次（所有副本一起标记）
-  const keyOf = (parentId, childId) => `${childId}|${parentId}`;
+  // 批内重复：同一条父母→子女在草稿中出现多次（所有副本一起标记）。
+  // 成员对按有序端点 (子女, 父母) 编码：ID 含「|」或空格的不同关系不会碰撞。
+  const keyOf = (parentId, childId) => pairKey(childId, parentId);
   const groups = new Map();
   for (const item of items) {
     if (!item.structurallyValid) continue;
@@ -276,8 +292,9 @@ function previewMergeMembers(state, keepId, mergeId) {
   const substitute = (id) => (id === mergeId ? keepId : id);
 
   const conflicts = [];
-  // 自指关系不参与去重与后续图校验，单独作为冲突报告
-  const mergedByKey = new Map(); // child|parent -> { parentId, childId, replaced }
+  // 自指关系不参与去重与后续图校验，单独作为冲突报告。
+  // 去重键为有序对 (子女, 父母)：ID 含「|」或空格的不同关系不会碰撞。
+  const mergedByKey = new Map(); // pairKey(child, parent) -> { parentId, childId, replaced }
   let affectedEdgeCount = 0;
   let removedDuplicateCount = 0;
 
@@ -298,7 +315,7 @@ function previewMergeMembers(state, keepId, mergeId) {
       continue;
     }
 
-    const key = `${nextChild}|${nextParent}`;
+    const key = pairKey(nextChild, nextParent);
     const existing = mergedByKey.get(key);
     if (existing) {
       removedDuplicateCount += 1;
@@ -722,7 +739,7 @@ function findGenerationConflicts(state, filterId = null) {
  *     每名子女至多两位父母、祖先环路），校验失败返回 { error } 并说明原因；
  *   - action 'remove'：移除一条现有关系；关系不存在返回 { error }。
  *
- * 随后在「当前图」与「假设图」上分别做辈分矛盾核查，按 祖先|后代 成员对逐对对比
+ * 随后在「当前图」与「假设图」上分别做辈分矛盾核查，按有序「祖先 → 后代」成员对逐对对比
  * （不是只比较矛盾总数）：
  *   - added：变更后新出现的矛盾（变更前该对无矛盾：可能本无祖先关系，或辈分一致）；
  *   - removed：变更后消失的矛盾；
@@ -772,7 +789,8 @@ function previewEdgeImpact(state, change) {
   const before = findGenerationConflicts(state);
   const after = findGenerationConflicts(hypoState);
 
-  const keyOf = (c) => `${c.ancestorId}|${c.descendantId}`;
+  // 成员对按有序端点 (祖先, 后代) 编码：ID 含「|」或空格的不同成员对不会碰撞
+  const keyOf = (c) => pairKey(c.ancestorId, c.descendantId);
   const beforeByKey = new Map(before.conflicts.map((c) => [keyOf(c), c]));
   const afterByKey = new Map(after.conflicts.map((c) => [keyOf(c), c]));
 
@@ -1119,10 +1137,11 @@ function validateBackup(raw, maxMembers = MAX_MEMBERS) {
   });
 
   // ---- 重复关系：同一父母→子女出现多次，每个副本都报错 ----
-  const firstEdgeByKey = new Map(); // child|parent -> 首次出现的下标
+  // 成员对按有序端点 (子女, 父母) 编码：ID 含「|」或空格的不同关系不会碰撞
+  const firstEdgeByKey = new Map(); // pairKey(child, parent) -> 首次出现的下标
   const deduped = [];
   for (const e of structEdges) {
-    const key = `${e.childId}|${e.parentId}`;
+    const key = pairKey(e.childId, e.parentId);
     const first = firstEdgeByKey.get(key);
     if (first !== undefined) {
       edgeError(
@@ -1179,6 +1198,7 @@ module.exports = {
   MAX_DESCENDANT_GENERATIONS,
   createState,
   getMember,
+  pairKey,
   isReachableUp,
   validateEdge,
   validateEdgeBatch,

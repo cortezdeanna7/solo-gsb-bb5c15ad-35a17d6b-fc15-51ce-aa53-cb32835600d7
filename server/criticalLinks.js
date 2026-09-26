@@ -1,5 +1,7 @@
 'use strict';
 
+const { pairKey } = require('./familyGraph');
+
 /**
  * 关键连接（桥梁关系）分析（纯函数，不修改 state、不写入任何数据）。
  *
@@ -72,8 +74,9 @@ function findCriticalLinks(state) {
     };
   }
 
-  // 无向邻接表：edgeKey 唯一定位一条关系；邻接项按邻居姓名、ID 排序保证确定性
-  const edgeKeyOf = (e) => `${e.parentId}|${e.childId}`;
+  // 无向邻接表：edgeKey 唯一定位一条关系；邻接项按邻居姓名、ID 排序保证确定性。
+  // 关系按有序端点 (父母, 子女) 编码：ID 含「|」或空格的不同关系不会碰撞。
+  const edgeKeyOf = (e) => pairKey(e.parentId, e.childId);
   const edgeByKey = new Map();
   const adj = new Map([...nameOf.keys()].map((id) => [id, []]));
   for (const e of edges) {
